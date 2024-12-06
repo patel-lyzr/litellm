@@ -15,7 +15,7 @@ import litellm
 
 class Supabase:
     # Class variables or attributes
-    supabase_table_name = "request_logs"
+    supabase_table_name = "new"
 
     def __init__(self):
         # Instance variables

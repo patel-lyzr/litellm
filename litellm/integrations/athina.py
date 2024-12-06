@@ -1,54 +1,92 @@
 import datetime
 
 
+
+TOKEN_ACTION_MAPPING = {
+    "openai": {
+        "o1-mini": {
+            "input_ratio":  3.0,
+            "output_ratio":  12.0, 
+        },
+        "o1-preview": {
+            "input_ratio": 15.0, 
+            "output_ratio": 60.0,  
+        },
+        "gpt-4o-mini": {
+            "input_ratio":  0.15,   
+            "output_ratio":  0.6,  
+        },
+        "gpt-4o": {
+            "input_ratio": 2.5,   
+            "output_ratio": 10.0,  
+        },
+        "text-embedding-ada-002":{
+            "input_ratio" :  0.1,
+            "output_ratio": 0
+        },
+        "text-embedding-3-small":{
+            "input_ratio" :  0.2,
+            "output_ratio": 0
+        },
+        "text-embedding-3-large":{
+            "input_ratio" :   0.13,
+            "output_ratio": 0
+        },
+    }
+}
+
+
+def calculate_actions(llm_provider: str, language_model: str, num_input_tokens: int, num_output_tokens: int) -> float:
+    provider_mapping = TOKEN_ACTION_MAPPING.get(llm_provider.lower(), TOKEN_ACTION_MAPPING["openai"])
+    model_config = provider_mapping.get(language_model)
+    
+    if not model_config:
+        return 0.0
+        
+    input_ratio = model_config.get("input_ratio", 0)
+    output_ratio = model_config.get("output_ratio", 0)
+    
+    input_actions = math.ceil((input_ratio / 2000) * num_input_tokens * 100) / 100
+    output_actions = math.ceil((output_ratio / 2000) * num_output_tokens * 100) / 100
+    
+    total_actions = input_actions + output_actions
+    return total_actions
+
+ 
 class AthinaLogger:
     def __init__(self):
         import os
+        self.env = os.getenv("ENV")
+        if self.env == "DEV":
+            self.factory_collection = "factory_dev"
 
-        self.athina_api_key = os.getenv("ATHINA_API_KEY")
+        elif self.env == "PROD":
+            self.factory_collection = "factory"
+
+        elif self.env == "PROD":
+            self.factory_collection = "factory"
+            
+        self.pagos_admin_token = os.getenv("PAGOS_ADMIN_TOKEN")
+        self.pagos_api_url = os.getenv("PAGOS_API_URL")
+
+        self.db_client = os.getenv("MONGO_URL")
+        
+
         self.headers = {
-            "athina-api-key": self.athina_api_key,
-            "Content-Type": "application/json",
-        }
-        self.athina_logging_url = "https://log.athina.ai/api/v1/log/inference"
-        self.additional_keys = [
-            "environment",
-            "prompt_slug",
-            "customer_id",
-            "customer_user_id",
-            "session_id",
-            "external_reference_id",
-            "context",
-            "expected_response",
-            "user_query",
-        ]
+            'accept': 'application/json',
+            'Authorization': f'Bearer {self.pagos_admin_token}'
+        }   
 
     def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
         import json
         import traceback
 
-        import requests  # type: ignore
+        import requests 
 
         try:
-            is_stream = kwargs.get("stream", False)
-            if is_stream:
-                if "complete_streaming_response" in kwargs:
-                    # Log the completion response in streaming mode
-                    completion_response = kwargs["complete_streaming_response"]
-                    response_json = (
-                        completion_response.model_dump() if completion_response else {}
-                    )
-                else:
-                    # Skip logging if the completion response is not available
-                    return
-            else:
-                # Log the completion response in non streaming mode
-                response_json = response_obj.model_dump() if response_obj else {}
             data = {
                 "language_model_id": kwargs.get("model"),
-                "request": kwargs,
-                "response": response_json,
-                "prompt_tokens": response_json.get("usage", {}).get("prompt_tokens"),
+                "prompt_tokens": response_obj.get("usage", {}).get("prompt_tokens"),
                 "completion_tokens": response_json.get("usage", {}).get(
                     "completion_tokens"
                 ),
@@ -59,41 +97,37 @@ class AthinaLogger:
                 type(end_time) is datetime.datetime
                 and type(start_time) is datetime.datetime
             ):
-                data["response_time"] = int(
+                data["_latency_ms"] = int(
                     (end_time - start_time).total_seconds() * 1000
                 )
 
-            if "messages" in kwargs:
-                data["prompt"] = kwargs.get("messages", None)
+          
+            data["created_at"] = datetime.utcnow()
 
-            # Directly add tools or functions if present
-            optional_params = kwargs.get("optional_params", {})
-            data.update(
-                (k, v)
-                for k, v in optional_params.items()
-                if k in ["tools", "functions"]
-            )
 
-            # Add additional metadata keys
             metadata = kwargs.get("litellm_params", {}).get("metadata", {})
             if metadata:
                 for key in self.additional_keys:
                     if key in metadata:
                         data[key] = metadata[key]
+            url = f"{self.pagos_api_url}/api/v1/usages/{org_id}/deduct/actions"
 
             response = requests.post(
-                self.athina_logging_url,
+                url,
                 headers=self.headers,
-                data=json.dumps(data, default=str),
+                params={'count': data["_latency_ms"]}
             )
+            import pdb
+            
+            pdb.set_trace()
             if response.status_code != 200:
                 print_verbose(
-                    f"Athina Logger Error - {response.text}, {response.status_code}"
+                    f"Lyzr Logger Error - {response.text}, {response.status_code}"
                 )
             else:
-                print_verbose(f"Athina Logger Succeeded - {response.text}")
+                print_verbose(f"Lyzr Logger Succeeded - {response.text}")
         except Exception as e:
             print_verbose(
-                f"Athina Logger Error - {e}, Stack trace: {traceback.format_exc()}"
+                f"Lyzr Logger Error - {e}, Stack trace: {traceback.format_exc()}"
             )
             pass
